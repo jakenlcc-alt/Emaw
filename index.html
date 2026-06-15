@@ -188,8 +188,9 @@ function currentWeekStart(now = new Date()) {
 function normalizeWeek(state) {
   const wk = currentWeekStart();
   const s = state || {};
-  if (s.weekStart === wk) return { ...emptyState, ...s };
-  return { ...emptyState, members: Array.isArray(s.members) ? s.members : [], weekStart: wk };
+  const dedupe = (arr) => [...new Set(Array.isArray(arr) ? arr : [])];
+  if (s.weekStart === wk) return { ...emptyState, ...s, members: dedupe(s.members) };
+  return { ...emptyState, members: dedupe(s.members), weekStart: wk };
 }
 
 function App() {
@@ -273,7 +274,7 @@ function App() {
       merged.sort((x, y) => (k === "messages" ? x.ts - y.ts : y.ts - x.ts));
       out[k] = merged;
     }
-    out.members = Array.isArray(mine.members) ? mine.members : (base.members || []);
+    out.members = [...new Set(Array.isArray(mine.members) ? mine.members : (base.members || []))];
     out.reads = mine.reads !== undefined ? mine.reads : (base.reads || {});
     out.presence = mine.presence !== undefined ? mine.presence : (base.presence || {});
     return out;
@@ -329,11 +330,8 @@ function App() {
     try {
       if (window.localStorage) window.localStorage.setItem("warrior:myname", n);
     } catch (e) { /* private mode */ }
-    mutate((d) => ({
-      ...d,
-      members: d.members.includes(n) ? d.members : [...d.members, n],
-      presence: { ...(d.presence || {}), [n]: Date.now() },
-    }));
+    // Membership + presence are added by the [name] effect below. Doing it only
+    // there (not here too) avoids two concurrent writes both appending the name.
   };
 
   useEffect(() => {

@@ -189,8 +189,9 @@ function currentWeekStart(now = new Date()) {
 function normalizeWeek(state) {
   const wk = currentWeekStart();
   const s = state || {};
-  if (s.weekStart === wk) return { ...emptyState, ...s };
-  return { ...emptyState, members: Array.isArray(s.members) ? s.members : [], weekStart: wk };
+  const dedupe = (arr) => [...new Set(Array.isArray(arr) ? arr : [])];
+  if (s.weekStart === wk) return { ...emptyState, ...s, members: dedupe(s.members) };
+  return { ...emptyState, members: dedupe(s.members), weekStart: wk };
 }
 
 export default function App() {
@@ -288,7 +289,7 @@ export default function App() {
     // members / reads / presence: the change function already computed these
     // from the freshest base inside mutate(), so take its result as-is.
     // (Unioning here would silently re-add a removed member.)
-    out.members = Array.isArray(mine.members) ? mine.members : (base.members || []);
+    out.members = [...new Set(Array.isArray(mine.members) ? mine.members : (base.members || []))];
     out.reads = mine.reads !== undefined ? mine.reads : (base.reads || {});
     out.presence = mine.presence !== undefined ? mine.presence : (base.presence || {});
     return out;
@@ -352,11 +353,8 @@ export default function App() {
     } catch (e) {
       // private mode / storage blocked — app still works for this session
     }
-    mutate((d) => ({
-      ...d,
-      members: d.members.includes(n) ? d.members : [...d.members, n],
-      presence: { ...(d.presence || {}), [n]: Date.now() },
-    }));
+    // Membership + presence are added by the [name] effect below. Doing it only
+    // there (not here too) avoids two concurrent writes both appending the name.
   };
 
   // If a remembered name reopens the app, make sure he's in the roster.
