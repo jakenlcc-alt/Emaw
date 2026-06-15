@@ -186,12 +186,28 @@ function currentWeekStart(now = new Date()) {
 
 // Scope state to the current week: if a Tuesday has passed since it was written,
 // wipe the weekly activity but keep the band roster.
+// Remove truly-identical roster entries (after trimming/collapsing whitespace),
+// which heals the accidental double-add. Case-SENSITIVE on purpose: "Jake" and
+// "Big Jake" — or even two men who type "Jake" vs "jake" — stay separate people.
+function dedupeMembers(arr) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of (Array.isArray(arr) ? arr : [])) {
+    if (typeof raw !== "string") continue;
+    const name = raw.trim().replace(/\s+/g, " ");
+    if (!name) continue;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
+}
+
 function normalizeWeek(state) {
   const wk = currentWeekStart();
   const s = state || {};
-  const dedupe = (arr) => [...new Set(Array.isArray(arr) ? arr : [])];
-  if (s.weekStart === wk) return { ...emptyState, ...s, members: dedupe(s.members) };
-  return { ...emptyState, members: dedupe(s.members), weekStart: wk };
+  if (s.weekStart === wk) return { ...emptyState, ...s, members: dedupeMembers(s.members) };
+  return { ...emptyState, members: dedupeMembers(s.members), weekStart: wk };
 }
 
 export default function App() {
@@ -289,7 +305,7 @@ export default function App() {
     // members / reads / presence: the change function already computed these
     // from the freshest base inside mutate(), so take its result as-is.
     // (Unioning here would silently re-add a removed member.)
-    out.members = [...new Set(Array.isArray(mine.members) ? mine.members : (base.members || []))];
+    out.members = dedupeMembers(Array.isArray(mine.members) ? mine.members : (base.members || []));
     out.reads = mine.reads !== undefined ? mine.reads : (base.reads || {});
     out.presence = mine.presence !== undefined ? mine.presence : (base.presence || {});
     return out;
@@ -345,7 +361,7 @@ export default function App() {
   }, []);
 
   const join = () => {
-    const n = nameInput.trim();
+    const n = nameInput.trim().replace(/\s+/g, " ");
     if (!n) return;
     setName(n);
     try {
@@ -370,7 +386,7 @@ export default function App() {
 
   // add a member by name (leader action)
   const addMember = (raw) => {
-    const n = (raw || "").trim();
+    const n = (raw || "").trim().replace(/\s+/g, " ");
     if (!n) return;
     mutate((d) => (d.members.includes(n) ? d : { ...d, members: [...d.members, n] }));
   };
