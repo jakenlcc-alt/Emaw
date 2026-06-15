@@ -1,0 +1,31 @@
+name: Test & Deploy to Netlify
+
+on:
+  push:
+    branches: ["claude/focused-goodall-61ltph", "main"]
+  workflow_dispatch:
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+      NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Validate build (function syntax + front-end compile)
+        run: npm run check
+
+      # Deploys only once the two Netlify secrets are present in the repo.
+      # Until then, the workflow still runs and stays green on the test steps.
+      - name: Deploy to Netlify
+        if: ${{ env.NETLIFY_AUTH_TOKEN != '' && env.NETLIFY_SITE_ID != '' }}
+        run: npx --yes netlify-cli@17 deploy --prod --dir . --functions netlify/functions
