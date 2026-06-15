@@ -110,6 +110,7 @@ const emptyState = {
   moments: [],
   reads: {}, // { name: [ "2026-06-11", ... ] } daily Bible-reading log
   presence: {}, // { name: lastSeenTs }
+  weekStart: null, // current EMAW week (Tuesday date); drives the weekly reset
 };
 
 const __today=(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;})();
@@ -169,6 +170,29 @@ function streakOf(days = []) {
   return streak;
 }
 
+// "EMAW week" starts Tuesday 12:00 AM America/New_York. The shared wall is
+// scoped to the current week, so it resets every Tuesday (roster/leader kept).
+function currentWeekStart(now = new Date()) {
+  const tz = "America/New_York";
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
+  const map = {};
+  for (const p of parts) map[p.type] = p.value;
+  const idx = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(map.weekday);
+  const daysSinceTue = (idx - 2 + 7) % 7;
+  const base = new Date(Date.UTC(Number(map.year), Number(map.month) - 1, Number(map.day)));
+  base.setUTCDate(base.getUTCDate() - daysSinceTue);
+  return `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2, "0")}-${String(base.getUTCDate()).padStart(2, "0")}`;
+}
+
+// Scope state to the current week: if a Tuesday has passed since it was written,
+// wipe the weekly activity but keep the band roster.
+function normalizeWeek(state) {
+  const wk = currentWeekStart();
+  const s = state || {};
+  if (s.weekStart === wk) return { ...emptyState, ...s };
+  return { ...emptyState, members: Array.isArray(s.members) ? s.members : [], weekStart: wk };
+}
+
 export default function App() {
   // Remember the name on THIS device (separate from the shared wall),
   // so a man doesn't have to retype it every time he opens the app.
@@ -201,7 +225,7 @@ export default function App() {
       const res = await window.storage.get(STORE_KEY, true);
       if (writeInFlight.current > 0) { setLoading(false); return; }
       if (res && res.value) {
-        const incoming = { ...emptyState, ...JSON.parse(res.value) };
+        const incoming = normalizeWeek(JSON.parse(res.value));
         setData(incoming);
         dataRef.current = incoming;
       }
@@ -228,7 +252,7 @@ export default function App() {
         if (writeInFlight.current > 0) return;
         writeInFlight.current += 1;
         const res = await window.storage.get(STORE_KEY, true);
-        const cur = res && res.value ? { ...emptyState, ...JSON.parse(res.value) } : { ...emptyState };
+        const cur = res && res.value ? normalizeWeek(JSON.parse(res.value)) : normalizeWeek({});
         const next = { ...cur, presence: { ...(cur.presence || {}), [name]: Date.now() } };
         await window.storage.set(STORE_KEY, JSON.stringify(next), true);
         dataRef.current = next;
@@ -279,14 +303,14 @@ export default function App() {
       let latest = null;
       try {
         const res = await window.storage.get(STORE_KEY, true);
-        latest = res && res.value ? { ...emptyState, ...JSON.parse(res.value) } : { ...emptyState };
+        latest = res && res.value ? normalizeWeek(JSON.parse(res.value)) : null;
       } catch (e) {
         // Read-before-write failed. A missing key (first ever write) is fine —
         // we fall back to local state — but a real read failure is worth seeing.
         console.warn("[warrior] mutate: could not read latest before write (using local copy):", e);
         latest = null;
       }
-      const base = latest || dataRef.current || emptyState;
+      const base = normalizeWeek(latest || dataRef.current || emptyState);
       const mine = changeFn(base);
       const next = latest ? mergeStates(latest, mine) : mine;
       setData(next);
@@ -929,7 +953,7 @@ function Chat({ name, data, persist, mutate, setRoom }) {
         </button>
       </div>
       <p style={{ fontSize: 11, color: "#6b7178", marginTop: 8, textAlign: "center" }}>
-        Enter to send · Shift+Enter for a new line · refreshes every few seconds
+        Enter to send · Shift+Enter for a new line · the wall resets every Tuesday
       </p>
     </>
   );
