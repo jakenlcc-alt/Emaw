@@ -1,0 +1,17 @@
+{
+  "name": "warrior-band",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Every Man a Warrior — small-group companion app (static front-end + Netlify Functions storage backend)",
+  "scripts": {
+    "check": "node --check netlify/functions/storage.mjs && node scripts/check-build.mjs"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@babel/preset-react": "^7.24.0"
+  }
+}
