@@ -82,7 +82,7 @@ const INK = "#1C2226";
 const ROOMS = [
   { id: "chat", label: "Chat", verse: "Encourage one another" },
   { id: "checkin", label: "Check-In", verse: "As iron sharpens iron" },
-  { id: "prayer", label: "Prayer", verse: "Pray for one another" },
+  { id: "quiet", label: "Quiet Time", verse: "Be still and know" },
   { id: "scripture", label: "Scripture", verse: "Hidden in my heart" },
   { id: "moments", label: "God Moments", verse: "Declare his works" },
 ];
@@ -125,11 +125,12 @@ const emptyState = {
   messages: [],
   checkins: [],
   prayers: [],
+  quiet: [],
   scriptures: [],
   moments: [],
   reads: {},    // { name: [ "2026-06-11", ... ] } daily Bible-reading log
   presence: {}, // { name: lastSeenTs }
-  weekStart: null, // current EMAW week (Tuesday date); drives the weekly reset
+  weekStart: null, // current EMAW week (Tuesday date), label only — no auto-reset
 };
 
 function timeAgo(ts) {
@@ -169,8 +170,8 @@ function streakOf(days = []) {
   return streak;
 }
 
-// "EMAW week" starts Tuesday 12:00 AM America/New_York. The shared wall is
-// scoped to the current week, so it resets every Tuesday (roster/leader kept).
+// "EMAW week" starts Tuesday 12:00 AM America/New_York. Used only as a label
+// for the current week — it NO LONGER auto-wipes anything (see normalizeWeek).
 function currentWeekStart(now = new Date()) {
   const tz = "America/New_York";
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
@@ -183,8 +184,6 @@ function currentWeekStart(now = new Date()) {
   return `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2, "0")}-${String(base.getUTCDate()).padStart(2, "0")}`;
 }
 
-// Scope state to the current week: if a Tuesday has passed since it was written,
-// wipe the weekly activity but keep the band roster.
 // Remove truly-identical roster entries (after trimming/collapsing whitespace),
 // which heals the accidental double-add. Case-SENSITIVE on purpose: "Jake" and
 // "Big Jake" — or even two men who type "Jake" vs "jake" — stay separate people.
@@ -202,11 +201,12 @@ function dedupeMembers(arr) {
   return out;
 }
 
+// Fill in any missing fields and de-dup the roster. IMPORTANT: this never
+// discards activity. The week only resets when the leader taps "Start fresh
+// week" — nothing disappears on its own anymore.
 function normalizeWeek(state) {
-  const wk = currentWeekStart();
   const s = state || {};
-  if (s.weekStart === wk) return { ...emptyState, ...s, members: dedupeMembers(s.members) };
-  return { ...emptyState, members: dedupeMembers(s.members), weekStart: wk };
+  return { ...emptyState, ...s, members: dedupeMembers(s.members), weekStart: s.weekStart || currentWeekStart() };
 }
 
 function App() {
@@ -279,7 +279,7 @@ function App() {
 
   const mergeStates = (base, mine) => {
     const out = { ...base, ...mine };
-    const listKeys = ["messages", "checkins", "prayers", "scriptures", "moments"];
+    const listKeys = ["messages", "checkins", "prayers", "quiet", "scriptures", "moments"];
     for (const k of listKeys) {
       const a = Array.isArray(base[k]) ? base[k] : [];
       const b = Array.isArray(mine[k]) ? mine[k] : [];
@@ -383,6 +383,36 @@ function App() {
     setNameInput("");
   };
 
+  // Leader-only manual reset. Writes the cleared state DIRECTLY (no merge) so the
+  // week's activity is truly wiped; the roster is kept. This replaces the old
+  // automatic Tuesday wipe so data never disappears unless the leader chooses.
+  const clearWeek = useCallback(async () => {
+    setSaving(true);
+    writeInFlight.current += 1;
+    try {
+      let latest = null;
+      try {
+        const res = await window.storage.get(STORE_KEY, true);
+        latest = res && res.value ? JSON.parse(res.value) : null;
+      } catch (e) {
+        latest = null;
+      }
+      const members = dedupeMembers((latest && latest.members) || dataRef.current.members);
+      const fresh = { ...emptyState, members, weekStart: currentWeekStart() };
+      setData(fresh);
+      dataRef.current = fresh;
+      await window.storage.set(STORE_KEY, JSON.stringify(fresh), true);
+      lastWriteAt.current = Date.now();
+      setSaveError(null);
+    } catch (e) {
+      console.error("[warrior] clearWeek: reset FAILED:", e);
+      setSaveError(String((e && e.message) || e) || "Reset failed");
+    } finally {
+      writeInFlight.current -= 1;
+      setSaving(false);
+    }
+  }, []);
+
   if (loading) {
     return (
       <Shell>
@@ -408,11 +438,11 @@ function App() {
       <main style={{ maxWidth: 720, margin: "0 auto", padding: "0 20px 80px" }}>
         {room === "chat" && <Chat name={name} data={data} persist={persist} mutate={mutate} setRoom={setRoom} />}
         {room === "checkin" && <CheckIn name={name} data={data} persist={persist} mutate={mutate} />}
-        {room === "prayer" && <Prayer name={name} data={data} persist={persist} mutate={mutate} />}
+        {room === "quiet" && <QuietTime name={name} data={data} mutate={mutate} />}
         {room === "scripture" && <Scripture name={name} data={data} persist={persist} mutate={mutate} isAdmin={isAdmin} />}
         {room === "moments" && <Moments name={name} data={data} persist={persist} mutate={mutate} />}
         {room === "admin" && (
-          <Admin name={name} data={data} isAdmin={isAdmin} setIsAdmin={setIsAdmin} addMember={addMember} removeMember={removeMember} switchUser={switchUser} setRoom={setRoom} />
+          <Admin name={name} data={data} isAdmin={isAdmin} setIsAdmin={setIsAdmin} addMember={addMember} removeMember={removeMember} switchUser={switchUser} setRoom={setRoom} clearWeek={clearWeek} />
         )}
       </main>
       {saveError && <SaveErrorToast msg={saveError} onClose={() => setSaveError(null)} />}
@@ -639,7 +669,7 @@ function Chat({ name, data, persist, mutate, setRoom }) {
         <textarea value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="Message the band…" style={{ ...textareaStyle, minHeight: 46, margin: 0, flex: 1 }} />
         <button onClick={send} style={{ ...primaryBtn, width: "auto", padding: "13px 20px" }}>Send</button>
       </div>
-      <p style={{ fontSize: 11, color: "#6b7178", marginTop: 8, textAlign: "center" }}>Enter to send · Shift+Enter for a new line · the wall resets every Tuesday</p>
+      <p style={{ fontSize: 11, color: "#6b7178", marginTop: 8, textAlign: "center" }}>Enter to send · Shift+Enter for a new line</p>
     </>
   );
 }
@@ -681,8 +711,9 @@ function CheckIn({ name, data, persist, mutate }) {
             <button key={m} onClick={() => setMood(m)} style={{ ...smallBtn, color: mood === m ? "#fff" : "#b9b09a", border: `1px solid ${mood === m ? moodColor[m] : "#34424a"}`, background: mood === m ? moodColor[m] : "transparent" }}>{m}</button>
           ))}
         </div>
-        <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="How's the week going? Where do you need the band?" style={textareaStyle} />
-        <button onClick={post} style={primaryBtn}>Post Check-In</button>
+        <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 12, letterSpacing: "0.1em", textTransform: "uppercase", color: ACCENT, margin: "14px 0 6px" }}>Prayer Request</div>
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="What can the band lift up for you this week?" style={textareaStyle} />
+        <button onClick={post} style={primaryBtn}>Post Prayer Request</button>
       </div>
       {data.checkins.length === 0 && <Empty text="No check-ins yet. Be the first to report in." />}
       {data.checkins.map((c) => (
@@ -748,50 +779,58 @@ function DailyRead({ name, data, readToday, toggleRead, myStreak }) {
   );
 }
 
-function Prayer({ name, data, persist, mutate }) {
-  const [text, setText] = useState("");
+// The six Quiet Time prompts. `short` renders a single-line input (the verse
+// reference); the rest are reflection textareas.
+const QT_FIELDS = [
+  { key: "ref", q: "Scripture reference", label: "Scripture reference", short: true, placeholder: "e.g. John 3:16-17" },
+  { key: "commandment", q: "Is there a commandment to obey?", label: "Commandment to obey", placeholder: "Write what you hear…" },
+  { key: "promise", q: "Is there a promise to claim?", label: "Promise to claim", placeholder: "Write what you hear…" },
+  { key: "sin", q: "Is there a sin to avoid?", label: "Sin to avoid", placeholder: "Write what you hear…" },
+  { key: "application", q: "Is there an application to make?", label: "Application to make", placeholder: "Write what you hear…" },
+  { key: "god", q: "Is there something new about God?", label: "Something new about God", placeholder: "Write what you hear…" },
+];
+const qtPromptStyle = { display: "block", fontFamily: "'Oswald', sans-serif", fontSize: 12, letterSpacing: "0.06em", color: "#9aa3a8", textTransform: "uppercase", marginBottom: 6 };
+const qtAnsLabelStyle = { fontFamily: "'Oswald', sans-serif", fontSize: 11, letterSpacing: "0.08em", color: ACCENT, textTransform: "uppercase", marginBottom: 3 };
+
+function QuietTime({ name, data, mutate }) {
+  const blank = { ref: "", commandment: "", promise: "", sin: "", application: "", god: "" };
+  const [form, setForm] = useState(blank);
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const hasAny = QT_FIELDS.some((f) => (form[f.key] || "").trim());
   const post = () => {
-    if (!text.trim()) return;
-    const entry = { id: Date.now(), author: name, text: text.trim(), ts: Date.now(), praying: [], answered: false };
-    mutate((d) => ({ ...d, prayers: [entry, ...(d.prayers || [])] }));
-    setText("");
+    if (!hasAny) return;
+    const entry = { id: Date.now(), author: name, ts: Date.now() };
+    for (const f of QT_FIELDS) entry[f.key] = (form[f.key] || "").trim();
+    mutate((d) => ({ ...d, quiet: [entry, ...(d.quiet || [])] }));
+    setForm(blank);
   };
-  const togglePray = (id) => mutate((d) => ({ ...d, prayers: (d.prayers || []).map((p) => p.id === id ? { ...p, praying: p.praying.includes(name) ? p.praying.filter((n) => n !== name) : [...p.praying, name] } : p) }));
-  const markAnswered = (id) => mutate((d) => ({ ...d, prayers: (d.prayers || []).map((p) => (p.id === id ? { ...p, answered: !p.answered } : p)) }));
-  const active = data.prayers.filter((p) => !p.answered);
-  const answered = data.prayers.filter((p) => p.answered);
+  const list = data.quiet || [];
   return (
     <>
-      <RoomTitle title="Prayer Requests" verse="Pray for one another, that you may be healed. — James 5:16" />
+      <RoomTitle title="Quiet Time" verse="Be still, and know that I am God. — Psalm 46:10" />
       <div style={{ background: "#1f282c", borderRadius: 10, padding: 16, marginBottom: 24 }}>
-        <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="What can the band lift up for you?" style={textareaStyle} />
-        <button onClick={post} style={primaryBtn}>Post Request</button>
-      </div>
-      {active.length === 0 && <Empty text="No open requests. The watch is quiet." />}
-      {active.map((p) => (
-        <div key={p.id} style={cardStyle}>
-          <p style={{ margin: 0, fontSize: 15, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{p.text}</p>
-          <Byline author={p.author} ts={p.ts} />
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <button onClick={() => togglePray(p.id)} style={{ ...smallBtn, color: p.praying.includes(name) ? ACCENT : STEEL, borderColor: p.praying.includes(name) ? ACCENT : STEEL }}>
-              🙏 Praying{p.praying.length ? ` · ${p.praying.length}` : ""}
-            </button>
-            <button onClick={() => markAnswered(p.id)} style={smallBtn}>Mark answered</button>
+        {QT_FIELDS.map((f, i) => (
+          <div key={f.key} style={{ marginBottom: 12 }}>
+            <label style={qtPromptStyle}>{i + 1}. {f.q}</label>
+            {f.short
+              ? <input value={form[f.key]} onChange={(e) => set(f.key, e.target.value)} placeholder={f.placeholder} style={{ ...inputStyle, margin: 0 }} />
+              : <textarea value={form[f.key]} onChange={(e) => set(f.key, e.target.value)} placeholder={f.placeholder} style={{ ...textareaStyle, minHeight: 64 }} />}
           </div>
-        </div>
-      ))}
-      {answered.length > 0 && (
-        <>
-          <h3 style={{ fontFamily: "'Oswald', sans-serif", fontSize: 14, letterSpacing: "0.1em", textTransform: "uppercase", color: "#3f7d4a", margin: "28px 0 12px" }}>✦ Answered Prayers</h3>
-          {answered.map((p) => (
-            <div key={p.id} style={{ ...cardStyle, background: PARCHMENT_DK, opacity: 0.92 }}>
-              <p style={{ margin: 0, fontSize: 15, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{p.text}</p>
-              <Byline author={p.author} ts={p.ts} />
-              <button onClick={() => markAnswered(p.id)} style={{ ...smallBtn, marginTop: 8 }}>Reopen</button>
+        ))}
+        <button onClick={post} disabled={!hasAny} style={{ ...primaryBtn, opacity: hasAny ? 1 : 0.5 }}>Save Quiet Time</button>
+      </div>
+      {list.length === 0 && <Empty text="No quiet-time entries yet. Sit with the Word and write what you hear." />}
+      {list.map((e) => (
+        <div key={e.id} style={{ ...cardStyle, borderLeft: `4px solid ${ACCENT}` }}>
+          {QT_FIELDS.filter((f) => (e[f.key] || "").trim()).map((f) => (
+            <div key={f.key} style={{ marginBottom: 8 }}>
+              <div style={qtAnsLabelStyle}>{f.label}</div>
+              <div style={{ fontSize: 15, lineHeight: 1.5, whiteSpace: "pre-wrap", color: PARCHMENT }}>{e[f.key]}</div>
             </div>
           ))}
-        </>
-      )}
+          <Byline author={e.author} ts={e.ts} />
+        </div>
+      ))}
     </>
   );
 }
@@ -944,11 +983,12 @@ function Empty({ text }) {
   return <div style={{ textAlign: "center", padding: "40px 20px", color: "#6b7178", fontFamily: "'Crimson Pro', serif", fontStyle: "italic", fontSize: 16 }}>{text}</div>;
 }
 
-function Admin({ name, data, isAdmin, setIsAdmin, addMember, removeMember, switchUser, setRoom }) {
+function Admin({ name, data, isAdmin, setIsAdmin, addMember, removeMember, switchUser, setRoom, clearWeek }) {
   const [pin, setPin] = useState("");
   const [err, setErr] = useState(false);
   const [newName, setNewName] = useState("");
   const [confirm, setConfirm] = useState(null);
+  const [weekConfirm, setWeekConfirm] = useState(false);
   const [diag, setDiag] = useState(null);
   const [diagBusy, setDiagBusy] = useState(false);
   const runDiag = async () => {
@@ -1020,6 +1060,19 @@ function Admin({ name, data, isAdmin, setIsAdmin, addMember, removeMember, switc
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
         <button onClick={() => setRoom("scripture")} style={{ ...primaryBtn, width: "auto", padding: "11px 18px" }}>★ Set this week's verse</button>
+      </div>
+      <div style={{ background: "#1f282c", borderRadius: 10, padding: 16, marginTop: 16, border: "1px solid #3a2a26" }}>
+        <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 12, letterSpacing: "0.1em", textTransform: "uppercase", color: ACCENT, marginBottom: 10 }}>Start a fresh week</div>
+        {weekConfirm ? (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, color: PARCHMENT }}>Clear all activity for everyone? This can't be undone.</span>
+            <button onClick={() => { clearWeek(); setWeekConfirm(false); }} style={{ ...smallBtn, color: "#fff", background: ACCENT, borderColor: ACCENT }}>Yes, clear it</button>
+            <button onClick={() => setWeekConfirm(false)} style={{ ...smallBtn, color: "#b9b09a", borderColor: "#34424a" }}>Cancel</button>
+          </div>
+        ) : (
+          <button onClick={() => setWeekConfirm(true)} style={{ ...primaryBtn, width: "auto", padding: "11px 18px", background: STEEL }}>Start fresh week</button>
+        )}
+        <p style={{ fontSize: 11, color: "#6b7178", marginTop: 10, lineHeight: 1.5 }}>Wipes chat, check-ins, prayers, quiet-time entries, scriptures and God-moments for the whole band, keeping the roster. Nothing resets automatically anymore — only this button clears the wall.</p>
       </div>
       <div style={{ background: "#1f282c", borderRadius: 10, padding: 16, marginTop: 16 }}>
         <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 12, letterSpacing: "0.1em", textTransform: "uppercase", color: "#9aa3a8", marginBottom: 10 }}>Leadership</div>
